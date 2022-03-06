@@ -1,0 +1,9 @@
+squat:
+  one_rm: 220.
+  min_weight: 140.
+bench press:
+  one_rm: 170.
+  min_weight: 100.
+deadlift:
+  one_rm: 245.
+  min_weight: 170.
