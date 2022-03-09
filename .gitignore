@@ -1,5 +1,7 @@
 .vscode/
+.devcontainer/
 **/__pycache__/
+.DS_Store
 
 env/
 Dockerfile
