@@ -1,4 +1,8 @@
 import yaml
+from datetime import timedelta
+from dateutil.relativedelta import relativedelta
+
+import config
 
 
 def get_yaml(filepath):
@@ -14,3 +18,9 @@ def ensure_no_zeros(array, fill_value = 1):
 
 def round_to_closest(x, step):
     return step * round(x / step)
+
+
+def date_filter(df):
+    dates = df["Date"]
+    six_month = str(config.DATETIME + relativedelta(months=-config.DATE_LIMIT))
+    return df[dates > six_month]
