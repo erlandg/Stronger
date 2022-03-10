@@ -1,9 +1,16 @@
 squat:
   one_rm: 220.
   min_weight: 140.
+  sigma: 3.
+  buffer: 0.02
 bench press:
   one_rm: 170.
   min_weight: 100.
+  one_rm_low_cap: 0.85
+  sigma: 3.
+  buffer: 0.02
 deadlift:
   one_rm: 245.
   min_weight: 180.
+  sigma: 3.
+  buffer: 0.05
