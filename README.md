@@ -31,3 +31,11 @@ deadlift:
 ```
 
 Argument `[-a]` will tell the program to provide plots of the data.
+
+
+## Sample Dataset
+
+You may freely use the following OneDrive link to download a sample-dataset 'strong.csv' if required
+https://1drv.ms/x/s!AoUVajUQQW1fhpQqv1BRHAfRyQfb7g?e=0W5VsH
+
+
