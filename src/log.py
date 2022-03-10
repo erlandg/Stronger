@@ -4,16 +4,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 
+from main import date_filter
 import config
 from utils import (
     ensure_no_zeros,
-    round_to_closest,
-    date_filter
+    round_to_closest
 )
 from load import parse_config
 
 
-MAX_REP_COUNT: int = 12 # cap number of reps
+def add_buffer(zs, weight_ax, buffer, limits=None):
+    for row in range(zs.shape[0]):
+        zs[row,:][weight_ax <= limits[row]] += buffer
+    return zs
 
 
 def count_instances(df, weight, rep, rpe=None, r_max=None):
@@ -28,7 +31,6 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
 
 
 def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, z_buffer=0, **filter_kwargs):
-    zs = zs + z_buffer
     if filter is not None:
         zs = filter(zs, **filter_kwargs)
     zs = zs / zs.sum()
@@ -47,31 +49,31 @@ def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=Non
         return fig, ax
 
 
-def create_plots(exercise, exercise_df, cfg = None):
+def create_plots(exercise, exercise_df, cfg):
     # Most common variation
     exercise_counts = exercise_df.groupby(["Date", "Exercise Name"])["Exercise Name"].nunique().reset_index(name="counts")["Exercise Name"].value_counts()
     print(f"{exercise} exercise counts:\n{exercise_counts}")
     main_exercise = exercise_counts.index[0]
     main_df = exercise_df[exercise_df["Exercise Name"] == main_exercise]
 
-    if cfg is not None:
-        min_weight = cfg.min_weight
-        main_df = main_df[main_df["Weight"] >= min_weight]
-    else:
-        min_weight = 0
+    min_weight = cfg.min_weight
+    main_df = main_df[main_df["Weight"] >= min_weight]
 
     # Create heatmap
     xs, ys = np.meshgrid(
         np.arange(
             round_to_closest(min_weight, config.WEIGHT_STEP),
-            round_to_closest(main_df["Weight"].max(), config.WEIGHT_STEP) + config.WEIGHT_STEP,
+            round_to_closest(cfg.one_rm, config.WEIGHT_STEP) + config.WEIGHT_STEP,
             config.WEIGHT_STEP
         ),
-        np.arange(1, MAX_REP_COUNT + 1, 1)
+        np.arange(1, config.MAX_REP_COUNT + 1, 1)
     )
     zs = np.array([[count_instances(
-        main_df, weight, rep, r_max = MAX_REP_COUNT
-    ) for weight in xs[0,:]] for rep in ys[:,0]])
+        main_df, weight, rep, r_max = config.MAX_REP_COUNT
+    ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+
+    zs = add_buffer(zs, weight_ax = xs[0,:], buffer = .1, limits = cfg.get_rep_max(cfg.one_rm, ys[:,0]))
+
     sigma_multiplier = 2
     plot_heatmap(
         xs,
