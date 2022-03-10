@@ -6,4 +6,4 @@ bench press:
   min_weight: 100.
 deadlift:
   one_rm: 245.
-  min_weight: 170.
+  min_weight: 180.

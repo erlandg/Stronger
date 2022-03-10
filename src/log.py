@@ -2,18 +2,29 @@ import click
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import (
+    gaussian_filter,
+    maximum_filter,
+    minimum_filter,
+    median_filter,
+    percentile_filter,
+    rank_filter,
+    uniform_filter,
+)
 
+from main import date_filter
 import config
 from utils import (
     ensure_no_zeros,
-    round_to_closest,
-    date_filter
+    round_to_closest
 )
 from load import parse_config
 
 
-MAX_REP_COUNT: int = 12 # cap number of reps
+def add_buffer(zs, weight_ax, buffer, limits=None):
+    for row in range(zs.shape[0]):
+        zs[row,:][weight_ax <= limits[row]] += buffer
+    return zs
 
 
 def count_instances(df, weight, rep, rpe=None, r_max=None):
@@ -27,8 +38,7 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
     return overlap["Exercise Name"].sum() # Count instances of overlapping required fields "Exercise Name".
 
 
-def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, z_buffer=0, **filter_kwargs):
-    zs = zs + z_buffer
+def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **filter_kwargs):
     if filter is not None:
         zs = filter(zs, **filter_kwargs)
     zs = zs / zs.sum()
@@ -47,40 +57,62 @@ def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=Non
         return fig, ax
 
 
-def create_plots(exercise, exercise_df, cfg = None):
-    # Most common variation
+def extract_meshgrid(exercise, exercise_df, cfg, return_df = False):
+    # Finds most common variation by # days trained (not # sets).
     exercise_counts = exercise_df.groupby(["Date", "Exercise Name"])["Exercise Name"].nunique().reset_index(name="counts")["Exercise Name"].value_counts()
     print(f"{exercise} exercise counts:\n{exercise_counts}")
     main_exercise = exercise_counts.index[0]
     main_df = exercise_df[exercise_df["Exercise Name"] == main_exercise]
 
-    if cfg is not None:
-        min_weight = cfg.min_weight
-        main_df = main_df[main_df["Weight"] >= min_weight]
-    else:
-        min_weight = 0
+    min_weight = cfg.min_weight
+    main_df = main_df[main_df["Weight"] >= min_weight]
 
     # Create heatmap
     xs, ys = np.meshgrid(
         np.arange(
             round_to_closest(min_weight, config.WEIGHT_STEP),
-            round_to_closest(main_df["Weight"].max(), config.WEIGHT_STEP) + config.WEIGHT_STEP,
+            round_to_closest(cfg.one_rm, config.WEIGHT_STEP) + config.WEIGHT_STEP,
             config.WEIGHT_STEP
         ),
-        np.arange(1, MAX_REP_COUNT + 1, 1)
+        np.arange(1, config.MAX_REP_COUNT + 1, 1),
+        sparse = True
     )
     zs = np.array([[count_instances(
-        main_df, weight, rep, r_max = MAX_REP_COUNT
-    ) for weight in xs[0,:]] for rep in ys[:,0]])
-    sigma_multiplier = 2
+        main_df, weight, rep, r_max = config.MAX_REP_COUNT
+    ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+
+    zs = add_buffer(
+        zs,
+        weight_ax = xs[0,:],
+        buffer = cfg.buffer * exercise_counts.iloc[0],
+        limits = cfg.get_rep_max(cfg.one_rm, ys[:,0])
+    )
+    return xs, ys, zs
+
+
+def create_plots(exercise, xs, ys, zs, cfg, filter=None, **filter_kwargs):
+    if (filter == 'gauss') or (filter == 'gaussian'):
+        sigma = cfg.sigma * np.array(zs.shape)/sum(zs.shape)
+        filter = lambda array: gaussian_filter(array, sigma, **filter_kwargs)
+    elif (filter == 'max') or (filter == 'maximum'):
+        filter = lambda array: maximum_filter(array, **filter_kwargs)
+    elif (filter == 'min') or (filter == 'minimum'):
+        filter = lambda array: minimum_filter(array, **filter_kwargs)
+    elif filter == 'uniform':
+        filter = lambda array: uniform_filter(array, **filter_kwargs)
+    elif filter == 'median':
+        filter = lambda array: median_filter(array, **filter_kwargs)
+    elif filter == 'percentile':
+        filter = lambda array: percentile_filter(array, **filter_kwargs)
+    elif filter == 'rank':
+        filter = lambda array: rank_filter(array, **filter_kwargs)
+
     plot_heatmap(
         xs,
         ys,
         zs,
-        filter = gaussian_filter,
-        sigma = sigma_multiplier * np.array(zs.shape)/sum(zs.shape),
-        z_buffer = .0,
-        save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap-filter.png",
+        filter = filter,
+        save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap.png",
         title = f"{exercise} rep frequency",
         xlabel = "Weight",
         ylabel = "Reps",
@@ -110,26 +142,27 @@ def log_data(filepath, config_path, analysis):
     filepath = config.DATA_DIR / filepath
     file_df = pd.read_csv(filepath, header = 0)
     file_df["Exercise Name"] = file_df["Exercise Name"].str.lower()
-
+    # Remove old data.
     file_df = date_filter(file_df).reset_index()
 
-    exercise_df = {
+    exercise_dfs = {
         "Squat": file_df[file_df["Exercise Name"].str.contains("squat")],
         "Bench Press": file_df[file_df["Exercise Name"].str.contains("bench press")],
         "Deadlift": file_df[file_df["Exercise Name"].str.contains("deadlift")],
     }
 
-    if config_path is not None:
-        cfgs = parse_config(
-            config_path,
-            config.Exercise
-        )
-    else:
-        cfgs = [None for _ in range(len(exercise_df))]
+    cfgs = parse_config(
+        config_path,
+        config.Exercise
+    )
+
+    meshes = {
+        exercise: extract_meshgrid(exercise, df, cfg) for (exercise, df), cfg in zip(exercise_dfs, cfgs)
+    }
 
     if analysis:
-        for (exercise, df), cfg in zip(exercise_df.items(), cfgs):
-            create_plots(exercise, df, cfg)
+        for (exercise, (xs, ys, zs)), cfg in zip(meshes.items(), cfgs):
+            create_plots(exercise, xs, ys, zs, cfg, filter=gaussian_filter)
 
 
 
