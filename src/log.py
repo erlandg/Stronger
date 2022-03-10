@@ -16,14 +16,25 @@ from main import date_filter
 import config
 from utils import (
     ensure_no_zeros,
-    round_to_closest
+    round_to_closest,
+    inverse_lombardi,
+    inverse_brzycki,
 )
 from load import parse_config
 
 
-def add_buffer(zs, weight_ax, buffer, limits=None):
+def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None):
     for row in range(zs.shape[0]):
-        zs[row,:][weight_ax <= limits[row]] += buffer
+        if upper_limit is not None:
+            max = upper_limit[row]
+        else:
+            max = weight_ax.max()
+        if lower_limit is not None:
+            min = lower_limit[row]
+        else:
+            min = weight_ax.min()
+        zs[row,:][weight_ax <= max] += buffer
+        zs[row,:][weight_ax <= min] = 0 # Remove junk volume
     return zs
 
 
@@ -40,7 +51,7 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
 
 def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **filter_kwargs):
     if filter is not None:
-        zs = filter(zs, **filter_kwargs)
+        zs = filter(zs)
     zs = zs / zs.sum()
 
     fig, ax = plt.subplots()
@@ -85,7 +96,8 @@ def extract_meshgrid(exercise, exercise_df, cfg, return_df = False):
         zs,
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
-        limits = cfg.get_rep_max(cfg.one_rm, ys[:,0])
+        lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = inverse_lombardi),
     )
     return xs, ys, zs
 
@@ -93,7 +105,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, return_df = False):
 def create_plots(exercise, xs, ys, zs, cfg, filter=None, **filter_kwargs):
     if (filter == 'gauss') or (filter == 'gaussian'):
         sigma = cfg.sigma * np.array(zs.shape)/sum(zs.shape)
-        filter = lambda array: gaussian_filter(array, sigma, **filter_kwargs)
+        filter = lambda array: gaussian_filter(array, sigma=sigma, **filter_kwargs)
     elif (filter == 'max') or (filter == 'maximum'):
         filter = lambda array: maximum_filter(array, **filter_kwargs)
     elif (filter == 'min') or (filter == 'minimum'):
@@ -106,6 +118,7 @@ def create_plots(exercise, xs, ys, zs, cfg, filter=None, **filter_kwargs):
         filter = lambda array: percentile_filter(array, **filter_kwargs)
     elif filter == 'rank':
         filter = lambda array: rank_filter(array, **filter_kwargs)
+    else: filter = None
 
     plot_heatmap(
         xs,
@@ -157,12 +170,12 @@ def log_data(filepath, config_path, analysis):
     )
 
     meshes = {
-        exercise: extract_meshgrid(exercise, df, cfg) for (exercise, df), cfg in zip(exercise_dfs, cfgs)
+        exercise: extract_meshgrid(exercise, df, cfg) for (exercise, df), cfg in zip(exercise_dfs.items(), cfgs)
     }
 
     if analysis:
         for (exercise, (xs, ys, zs)), cfg in zip(meshes.items(), cfgs):
-            create_plots(exercise, xs, ys, zs, cfg, filter=gaussian_filter)
+            create_plots(exercise, xs, ys, zs, cfg, filter="gauss")
 
 
 
