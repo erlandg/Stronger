@@ -18,9 +18,18 @@ from utils import (
     ensure_no_zeros,
     round_to_closest,
     inverse_lombardi,
+    inverse_oconner,
     inverse_brzycki,
+    inverse_wathen,
 )
 from load import parse_config
+
+
+def column_normalise(array):
+    col_sums = array.sum(0)
+    for col, col_sum in zip(range(array.shape[1]), col_sums):
+        array[:,col] = array[:,col] / col_sum
+    return array
 
 
 def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None):
