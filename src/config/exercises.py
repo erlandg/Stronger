@@ -15,4 +15,4 @@ class Exercise(Config):
     
     @staticmethod
     def get_rep_max(one_rm, r):
-        return round_to_closest(inverse_brzycki(one_rm, r), SMALLEST_WEIGHT_STEP)[::-1]
+        return round_to_closest(inverse_brzycki(one_rm, r), SMALLEST_WEIGHT_STEP)

@@ -30,7 +30,7 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
     return overlap["Exercise Name"].sum() # Count instances of overlapping required fields "Exercise Name".
 
 
-def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, z_buffer=0, **filter_kwargs):
+def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **filter_kwargs):
     if filter is not None:
         zs = filter(zs, **filter_kwargs)
     zs = zs / zs.sum()
@@ -66,13 +66,19 @@ def create_plots(exercise, exercise_df, cfg):
             round_to_closest(cfg.one_rm, config.WEIGHT_STEP) + config.WEIGHT_STEP,
             config.WEIGHT_STEP
         ),
-        np.arange(1, config.MAX_REP_COUNT + 1, 1)
+        np.arange(1, config.MAX_REP_COUNT + 1, 1),
+        sparse = True
     )
     zs = np.array([[count_instances(
         main_df, weight, rep, r_max = config.MAX_REP_COUNT
     ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
 
-    zs = add_buffer(zs, weight_ax = xs[0,:], buffer = .1, limits = cfg.get_rep_max(cfg.one_rm, ys[:,0]))
+    zs = add_buffer(
+        zs,
+        weight_ax = xs[0,:],
+        buffer = .01 * exercise_counts.iloc[0],
+        limits = cfg.get_rep_max(cfg.one_rm, ys[:,0])
+    )
 
     sigma_multiplier = 2
     plot_heatmap(
@@ -81,8 +87,7 @@ def create_plots(exercise, exercise_df, cfg):
         zs,
         filter = gaussian_filter,
         sigma = sigma_multiplier * np.array(zs.shape)/sum(zs.shape),
-        z_buffer = .0,
-        save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap-filter.png",
+        save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap.png",
         title = f"{exercise} rep frequency",
         xlabel = "Weight",
         ylabel = "Reps",

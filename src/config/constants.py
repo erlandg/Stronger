@@ -6,6 +6,8 @@ MAX_REP_COUNT: int = 12 # cap number of reps
 SMALLEST_WEIGHT_STEP: float = 0.5 # The smallest weight step allowed
 WEIGHT_STEP: float = 2.5 # in kg
 
+MESHGRID_SIGMA_MULTIPLIER: float = 5. # Decides the blurring on the mesh grid.
+
 DATETIME = date.today()
 DATE_LIMIT: int = 6 # filter dataset to the last N months
 
