@@ -123,8 +123,15 @@ def masked_multinormal_distribution(xs, ys, mask = None, reps=None, weight=None)
             get_median(mask, xs, ys, weight = mean_weight),
             config.WEIGHT_STEP
         )
+    else:
+        mean_weight, mean_reps = weight, reps
+    print(f"Estimated mean set: {mean_reps} at {mean_weight}{config.WEIGHT_UNIT}")
+    print(f"""If this estimate is too high (or low):
+- adjust parameter 'one_rm_low_cap' down (or up),
+- or set your desired weight at {mean_reps} reps with 'mean_weight_at_reps'""")
 
     covariance = np.cov(datapoints.T)
+
     multinormal = multivariate_normal([mean_weight, mean_reps], covariance)
 
     all_datapoints = gridshape_to_datapoints(np.ones_like(mask), xs, ys)
@@ -139,9 +146,10 @@ def masked_multinormal_distribution(xs, ys, mask = None, reps=None, weight=None)
 
 
 def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False, **filter_kwargs):
+    print(f"{50*'*'}\nAnalysing {exercise}:")
     # Finds most common variation by # days trained (not # sets).
     exercise_counts = exercise_df.groupby(["Date", "Exercise Name"])["Exercise Name"].nunique().reset_index(name="counts")["Exercise Name"].value_counts()
-    print(f"{exercise} exercise counts:\n{exercise_counts}")
+    # print(f"{exercise} exercise counts:\n{exercise_counts}")
     main_exercise = exercise_counts.index[0]
     main_df = exercise_df[exercise_df["Exercise Name"] == main_exercise]
 

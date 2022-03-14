@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 from datetime import date
+from typing import Literal
+
+WEIGHT_UNIT: Literal["kg", "lbs"] = "kg"
 
 MAX_REP_COUNT: int = 12 # cap number of reps
 SMALLEST_WEIGHT_STEP: float = 0.5 # The smallest weight step allowed
