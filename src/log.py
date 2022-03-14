@@ -165,7 +165,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
     zs = np.zeros((ys.shape[0], xs.shape[1]))
 
     # Add a buffer and remove points below lower threshold
-    zs, mask = add_buffer(
+    _, mask = add_buffer(
         zs.copy(),
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
