@@ -20,7 +20,7 @@ class Exercise(Config):
     min_weight: float
     # The proportion of 1RM you could lift on a bad day. Recommended to be conservative.
     # e.g. 85% of 1RM at 100kg:  0.85 * 100kg = 85kg  ==>  insert 0.85 here
-    one_rm_low_cap: float = 0.85
+    one_rm_low_cap: float = 0.80
     # Mean rep describe the average rep set. E.g. if mean 4, the rep/weight distribution will be centered at 4
     mean_reps: int = 4
     # (Optional: leave blank to fill with the median estimated weight - between upper and lower limit calculated based on
