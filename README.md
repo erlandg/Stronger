@@ -1,5 +1,15 @@
 # Training
 
+## Idea
+
+Bench Press sample space
+:-------------------------------------:
+![](./out/example.png)
+
+The project will create a sample space, as shown above, for (so far only powerlifting-oriented) exercises. From this space randomly generated training programs will be sampled in accordance with the principle of [progressive overload](https://en.wikipedia.org/wiki/Progressive_overload). This is achieved by automatically selecting advantageous areas of the sample space and assure total volume increase on a week-to-week basis - to be repeated periodically.  
+
+In addition, training days may be classified into categories by their difficulty. The idea is that randomly generated training programs such as these will inject some much needed variation into a sometimes very repetitive sport. We see that the training programs will thus allow for structured training, while fully exploiting the good days for the most high-intensity training, while easier workouts may be reserved for worse days.
+
 ## Installation
 
 Had some errors with python 3.10, so versions < 3.10 recommended.
