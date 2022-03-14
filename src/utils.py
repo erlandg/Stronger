@@ -78,3 +78,24 @@ def round_to_closest(x, step):
         return step * (x / step).round()
     else:
         return step * round(x / step)
+
+
+def gridshape_to_datapoints(mask, index_0, index_1):
+    datapoints = []
+    for j, y in enumerate(index_1):
+        for i, x in enumerate(index_0):
+            if mask[j,i]:
+                datapoints.append((x, y))
+    return np.array(datapoints)
+
+
+def get_median(mask, xs, ys, reps=None, weight=None):
+    assert (reps is not None) or (weight is not None), "Either reps or weight argument must be given.."
+    assert not ((reps is not None) and (weight is not None)), "Reps and weight arguments cannot both be given."
+    if reps is not None:
+        median = np.where(mask[ys == reps])[-1]
+        median = np.median(xs[median])
+    elif weight is not None:
+        median = np.where(mask[xs == weight])[-1]
+        median = np.median(ys[median])
+    return median

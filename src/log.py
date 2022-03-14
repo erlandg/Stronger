@@ -1,16 +1,11 @@
+from audioop import mul
+from itertools import count
 import click
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.ndimage import (
-    gaussian_filter,
-    maximum_filter,
-    minimum_filter,
-    median_filter,
-    percentile_filter,
-    rank_filter,
-    uniform_filter,
-)
+from scipy.stats import multivariate_normal
+from sklearn.decomposition import PCA
 
 from main import date_filter
 import config
@@ -21,6 +16,8 @@ from utils import (
     inverse_oconner,
     inverse_brzycki,
     inverse_wathen,
+    gridshape_to_datapoints,
+    get_median,
 )
 from load import parse_config
 
@@ -32,7 +29,7 @@ def column_normalise(array):
     return array
 
 
-def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None):
+def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None, return_mask=False):
     for row in range(zs.shape[0]):
         if upper_limit is not None:
             max = upper_limit[row]
@@ -44,7 +41,38 @@ def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None):
             min = weight_ax.min()
         zs[row,:][weight_ax <= max] += buffer
         zs[row,:][weight_ax <= min] = 0 # Remove junk volume
-    return zs
+    if not return_mask:
+        return zs
+    else:
+        return zs, zs != 0
+
+
+def get_filter(filter, **filter_kwargs):
+    if (filter == 'gauss') or (filter == 'gaussian'):
+        from scipy.ndimage import gaussian_filter
+        filter = lambda array: gaussian_filter(array, **filter_kwargs)
+    elif (filter == 'max') or (filter == 'maximum'):
+        from scipy.ndimage import maximum_filter
+        filter = lambda array: maximum_filter(array, **filter_kwargs)
+    elif (filter == 'min') or (filter == 'minimum'):
+        from scipy.ndimage import minimum_filter
+        filter = lambda array: minimum_filter(array, **filter_kwargs)
+    elif filter == 'uniform':
+        from scipy.ndimage import uniform_filter
+        filter = lambda array: uniform_filter(array, **filter_kwargs)
+    elif filter == 'median':
+        from scipy.ndimage import median_filter
+        filter = lambda array: median_filter(array, **filter_kwargs)
+    elif filter == 'percentile':
+        from scipy.ndimage import percentile_filter
+        filter = lambda array: percentile_filter(array, **filter_kwargs)
+    elif filter == 'rank':
+        from scipy.ndimage import rank_filter
+        filter = lambda array: rank_filter(array, **filter_kwargs)
+    else:
+        print(f"Filter {filter} not recognised.")
+        return
+    return filter
 
 
 def count_instances(df, weight, rep, rpe=None, r_max=None):
@@ -58,13 +86,11 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
     return overlap["Exercise Name"].sum() # Count instances of overlapping required fields "Exercise Name".
 
 
-def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **filter_kwargs):
-    if filter is not None:
-        zs = filter(zs)
+def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **mesh_kwargs):
     zs = zs / zs.sum()
 
     fig, ax = plt.subplots()
-    c = ax.pcolormesh(xs, ys, zs, cmap=cmap, vmin=0)
+    c = ax.pcolormesh(xs, ys, zs, cmap=cmap, **mesh_kwargs)
     fig.colorbar(c, ax = ax)
     ax.axis([xs.min(), xs.max(), ys.min(), ys.max()])
 
@@ -77,7 +103,42 @@ def plot_heatmap(xs, ys, zs, filter=None, save_path=None, title=None, xlabel=Non
         return fig, ax
 
 
-def extract_meshgrid(exercise, exercise_df, cfg, return_df = False):
+def masked_multinormal_distribution(xs, ys, mask = None, reps=None, weight=None):
+    assert (reps is not None) or (weight is not None), "Either reps or weight argument must be given.."
+    guess_weight, guess_reps = weight is None, reps is None
+
+    if mask is None:
+        mask = np.ones(len(ys), len(xs))
+
+    datapoints = gridshape_to_datapoints(mask, xs, ys)
+    if guess_weight:
+        mean_reps = reps
+        mean_weight = round_to_closest(
+            get_median(mask, xs, ys, reps = mean_reps),
+            config.WEIGHT_STEP
+        )
+    elif guess_reps:
+        mean_weight = weight
+        mean_reps = round_to_closest(
+            get_median(mask, xs, ys, weight = mean_weight),
+            config.WEIGHT_STEP
+        )
+
+    covariance = np.cov(datapoints.T)
+    multinormal = multivariate_normal([mean_weight, mean_reps], covariance)
+
+    all_datapoints = gridshape_to_datapoints(np.ones_like(mask), xs, ys)
+    multi_w = multinormal.pdf(all_datapoints)
+    pdf_mesh = np.array([[
+        multi_w[np.bitwise_and(all_datapoints[:,0] == w, all_datapoints[:,1] == r)] for w in xs
+    ] for r in ys])[:,:,0]
+    pdf_mesh[~mask] = 0
+    # plot_heatmap(xs, ys, pdf_mesh, save_path="test.png") # For testing
+    return pdf_mesh
+
+
+
+def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False, **filter_kwargs):
     # Finds most common variation by # days trained (not # sets).
     exercise_counts = exercise_df.groupby(["Date", "Exercise Name"])["Exercise Name"].nunique().reset_index(name="counts")["Exercise Name"].value_counts()
     print(f"{exercise} exercise counts:\n{exercise_counts}")
@@ -97,49 +158,37 @@ def extract_meshgrid(exercise, exercise_df, cfg, return_df = False):
         np.arange(1, config.MAX_REP_COUNT + 1, 1),
         sparse = True
     )
-    zs = np.array([[count_instances(
-        main_df, weight, rep, r_max = config.MAX_REP_COUNT
-    ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+    # # Add recorded sets
+    # zs = np.array([[count_instances(
+    #     main_df, weight, rep, r_max = config.MAX_REP_COUNT
+    # ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+    zs = np.zeros((ys.shape[0], xs.shape[1]))
 
-    zs = add_buffer(
-        zs,
+    # Add a buffer and remove points below lower threshold
+    _, mask = add_buffer(
+        zs.copy(),
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = inverse_lombardi),
+        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        return_mask = True
     )
-    return xs, ys, zs
 
+    # Add gaussian distribution around mean weight @ mean reps
+    zs += masked_multinormal_distribution(xs[0,:], ys[:,0], mask, reps = cfg.mean_reps, weight = cfg.mean_weight_at_reps)
 
-def create_plots(exercise, xs, ys, zs, cfg, filter=None, **filter_kwargs):
-    if (filter == 'gauss') or (filter == 'gaussian'):
-        sigma = cfg.sigma * np.array(zs.shape)/sum(zs.shape)
-        filter = lambda array: gaussian_filter(array, sigma=sigma, **filter_kwargs)
-    elif (filter == 'max') or (filter == 'maximum'):
-        filter = lambda array: maximum_filter(array, **filter_kwargs)
-    elif (filter == 'min') or (filter == 'minimum'):
-        filter = lambda array: minimum_filter(array, **filter_kwargs)
-    elif filter == 'uniform':
-        filter = lambda array: uniform_filter(array, **filter_kwargs)
-    elif filter == 'median':
-        filter = lambda array: median_filter(array, **filter_kwargs)
-    elif filter == 'percentile':
-        filter = lambda array: percentile_filter(array, **filter_kwargs)
-    elif filter == 'rank':
-        filter = lambda array: rank_filter(array, **filter_kwargs)
-    else: filter = None
-
-    plot_heatmap(
-        xs,
-        ys,
-        zs,
-        filter = filter,
-        save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap.png",
-        title = f"{exercise} rep frequency",
-        xlabel = "Weight",
-        ylabel = "Reps",
-        cmap = "hot",
+    # Get and apply filter
+    filter_ = get_filter(
+        filter,
+        sigma = cfg.sigma * np.array(zs.shape)/sum(zs.shape),
+        **filter_kwargs
     )
+    zs = filter_(zs)
+
+    if not return_df:
+        return xs, ys, zs
+    else:
+        return (xs, ys, zs), main_df    
 
 
 
@@ -164,7 +213,7 @@ def log_data(filepath, config_path, analysis):
     filepath = config.DATA_DIR / filepath
     file_df = pd.read_csv(filepath, header = 0)
     file_df["Exercise Name"] = file_df["Exercise Name"].str.lower()
-    # Remove old data.
+    # Remove out-of-date data. Based on DATE_LIMIT in config.constants.
     file_df = date_filter(file_df).reset_index()
 
     exercise_dfs = {
@@ -173,19 +222,25 @@ def log_data(filepath, config_path, analysis):
         "Deadlift": file_df[file_df["Exercise Name"].str.contains("deadlift")],
     }
 
-    cfgs = parse_config(
-        config_path,
-        config.Exercise
-    )
+    cfgs = parse_config(config_path, config.Exercise)
 
     meshes = {
-        exercise: extract_meshgrid(exercise, df, cfg) for (exercise, df), cfg in zip(exercise_dfs.items(), cfgs)
+        exercise: extract_meshgrid(exercise, df, cfg, filter="gauss") for (exercise, df), cfg in zip(exercise_dfs.items(), cfgs)
     }
 
     if analysis:
-        for (exercise, (xs, ys, zs)), cfg in zip(meshes.items(), cfgs):
-            create_plots(exercise, xs, ys, zs, cfg, filter="gauss")
-
+        for exercise, (xs, ys, zs) in meshes.items():
+            plot_heatmap(
+                xs,
+                ys,
+                zs,
+                save_path = f"{str(config.SAVE_DIR / exercise)}-heatmap.png",
+                title = f"{exercise} rep frequency",
+                xlabel = "Weight",
+                ylabel = "Reps",
+                cmap = "hot",
+                vmin = 0,
+            )
 
 
 if __name__ == "__main__":

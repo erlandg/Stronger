@@ -34,7 +34,7 @@ deadlift:
   ...: ...
 ```
 
-Argument `[-a]` will tell the program to provide plots of the data.
+Argument `[-a]` will tell the program to provide plots of the exercise sample spaces.
 
 
 ## Sample Dataset
