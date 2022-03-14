@@ -1,4 +1,4 @@
-# Training
+# Stronger - Work in Progress
 
 ## Idea
 
