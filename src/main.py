@@ -8,12 +8,6 @@ from load import parse_config
 from utils import get_yaml
 
 
-def date_filter(df):
-    dates = df["Date"]
-    six_month = str(config.DATETIME + relativedelta(months=-config.DATE_LIMIT))
-    return df[dates > six_month]
-
-
 @click.command()
 @click.option(
     "--config_path", "--config", "-c",
