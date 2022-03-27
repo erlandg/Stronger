@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
 from sklearn.decomposition import PCA
 
-from main import date_filter
+from datetime import timedelta
+from dateutil.relativedelta import relativedelta
 import config
 from utils import (
     ensure_no_zeros,
@@ -16,10 +17,17 @@ from utils import (
     inverse_oconner,
     inverse_brzycki,
     inverse_wathen,
+    mse,
     gridshape_to_datapoints,
     get_median,
 )
 from load import parse_config
+
+
+def date_filter(df):
+    dates = df["Date"]
+    six_month = str(config.DATETIME + relativedelta(months=-config.DATE_LIMIT))
+    return df[dates > six_month]
 
 
 def column_normalise(array):
@@ -29,8 +37,8 @@ def column_normalise(array):
     return array
 
 
-def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None, return_mask=False):
-    for row in range(zs.shape[0]):
+def add_buffer(mesh, weight_ax, buffer, lower_limit=None, upper_limit=None, return_mask=False):
+    for row in range(mesh.shape[0]):
         if upper_limit is not None:
             max = upper_limit[row]
         else:
@@ -39,12 +47,12 @@ def add_buffer(zs, weight_ax, buffer, lower_limit=None, upper_limit=None, return
             min = lower_limit[row]
         else:
             min = weight_ax.min()
-        zs[row,:][weight_ax <= max] += buffer
-        zs[row,:][weight_ax <= min] = 0 # Remove junk volume
+        mesh[row,:][weight_ax <= max] += buffer
+        mesh[row,:][weight_ax <= min] = 0 # Remove junk volume
     if not return_mask:
-        return zs
+        return mesh
     else:
-        return zs, zs != 0
+        return mesh, mesh != 0
 
 
 def get_filter(filter, **filter_kwargs):
@@ -73,6 +81,48 @@ def get_filter(filter, **filter_kwargs):
         print(f"Filter {filter} not recognised.")
         return
     return filter
+
+
+def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
+    assert recorded_sets.shape == (reps.shape[0], weights.shape[0]), "Incorrect shapes"
+    if cost == "mse":
+        cost_func = mse
+    else:
+        print(f"Cost function {cost} not recognised")
+
+    maxes = np.zeros(reps.shape)
+    for i, rep in enumerate(reps):
+        if np.sum(recorded_sets[i]) == 0:
+            maxes[i] = np.nan
+        else:
+            maxes[i] = weights[np.argmax(recorded_sets[i])]
+
+    estimator_loss = {estimator: 0 for estimator in config.ONE_REP_MAX.keys()}
+    for estimator in estimator_loss.keys():
+        estimated_rep_maxes = cfg.get_rep_max(cfg.one_rm, reps, rep_max_estimator = config.INVERSE_MAX[estimator])
+
+        for i, max in enumerate(maxes):
+            if np.isnan(max):
+                continue
+            estimator_loss[estimator] += cost_func(max, estimated_rep_maxes[i])
+
+    return min(estimator_loss, key=estimator_loss.get)
+
+
+def crop(mesh, weight_ax, lower_limit = None, upper_limit = None):
+    assert mesh.shape == (lower_limit.shape[0], weight_ax.shape[0]), f"Shapes do not match"
+    for row in range(mesh.shape[0]):
+        if upper_limit is not None:
+            max = upper_limit[row]
+        else:
+            max = weight_ax.max()
+        if lower_limit is not None:
+            min = lower_limit[row]
+        else:
+            min = weight_ax.min()
+        mesh[row,:][weight_ax > max] = 0
+        mesh[row,:][weight_ax <= min] = 0 # Remove junk volume
+    return mesh
 
 
 def count_instances(df, weight, rep, rpe=None, r_max=None):
@@ -166,11 +216,22 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         np.arange(1, config.MAX_REP_COUNT + 1, 1),
         sparse = True
     )
-    # # Add recorded sets
-    # zs = np.array([[count_instances(
-    #     main_df, weight, rep, r_max = config.MAX_REP_COUNT
-    # ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+    # Add recorded sets
+    recorded_sets = np.array([[count_instances(
+        main_df, weight, rep, r_max = config.MAX_REP_COUNT
+    ) for weight in xs[0,:]] for rep in ys[:,0]], dtype=np.float64)
+    recorded_sets = crop(
+        recorded_sets,
+        xs[0,:],
+        lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+    )
+
     zs = np.zeros((ys.shape[0], xs.shape[1]))
+    
+    if cfg.optimal_estimator is None:
+        estimator_string = fit_estimator(cfg, recorded_sets, xs[0,:], ys[:,0], cost = "mse")
+        setattr(cfg, "optimal_estimator", estimator_string)
+
 
     # Add a buffer and remove points below lower threshold
     _, mask = add_buffer(
@@ -178,12 +239,14 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)),
         return_mask = True
     )
 
+
     # Add gaussian distribution around mean weight @ mean reps
     zs += masked_multinormal_distribution(xs[0,:], ys[:,0], mask, reps = cfg.mean_reps, weight = cfg.mean_weight_at_reps)
+
 
     # Get and apply filter
     filter_ = get_filter(
@@ -192,6 +255,13 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         **filter_kwargs
     )
     zs = filter_(zs)
+    zs = crop(
+        zs,
+        xs[0,:],
+        lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)),
+
+    )
 
     if not return_df:
         return xs, ys, zs
@@ -222,7 +292,8 @@ def log_data(filepath, config_path, analysis):
     file_df = pd.read_csv(filepath, header = 0)
     file_df["Exercise Name"] = file_df["Exercise Name"].str.lower()
     # Remove out-of-date data. Based on DATE_LIMIT in config.constants.
-    file_df = date_filter(file_df).reset_index()
+    if config.DATE_LIMIT is not None:
+        file_df = date_filter(file_df).reset_index()
 
     exercise_dfs = {
         "Squat": file_df[file_df["Exercise Name"].str.contains("squat")],

@@ -3,12 +3,30 @@ from typing import Dict, Literal, Union
 from utils import (
     brzycki,
     inverse_brzycki,
+    lombardi,
     inverse_lombardi,
+    oconner,
     inverse_oconner,
+    wathen,
+    inverse_wathen,
     round_to_closest
 )
 from .config import Config
 from .constants import SMALLEST_WEIGHT_STEP
+
+
+ONE_REP_MAX = {
+    "brzycki": brzycki,
+    "lombardi": lombardi,
+    "oconner": oconner,
+    "wathen": wathen,
+}
+INVERSE_MAX = {
+    "brzycki": inverse_brzycki,
+    "lombardi": inverse_lombardi,
+    "oconner": inverse_oconner,
+    "wathen": inverse_wathen,
+}
 
 
 class Exercise(Config):
@@ -30,7 +48,20 @@ class Exercise(Config):
     sigma: float = 2
     # Adds a buffer to all rep-weight combinations in a reasonable range.
     buffer: float = 0.01
+    # Optimal estimator
+    optimal_estimator: Literal["brzycki", "lombardi", "oconner", "wathen"] = None
+
+    @staticmethod
+    def get_estimator(estimator_string, inverse = False):
+        if not inverse:
+            return ONE_REP_MAX[estimator_string]
+        else:
+            return INVERSE_MAX[estimator_string]
     
     @staticmethod
-    def get_rep_max(one_rm, r, rep_max_estimator = inverse_brzycki):
-        return round_to_closest(rep_max_estimator(one_rm, r), SMALLEST_WEIGHT_STEP)
+    def get_rep_max(one_rm, r, rep_max_estimator = inverse_brzycki, step = SMALLEST_WEIGHT_STEP):
+        if (step is not None) and (step > 0):
+            return round_to_closest(rep_max_estimator(one_rm, r), step)
+        else:
+            if step < 0: print(f"Step size must be equal or greater than 0. Returned with no rounding (equal to step = 0).")
+            return rep_max_estimator(one_rm, r)

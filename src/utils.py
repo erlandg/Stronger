@@ -62,6 +62,10 @@ def inverse_wathen(one_rm, r):
     return (48.8 + 53.8 * np.exp(-0.075 * r)) * one_rm / 100
 
 
+def mse(observed, target):
+    return np.mean((observed - target)**2)
+
+
 def get_yaml(filepath):
     with open(filepath, "r") as f:
         yamlfile = yaml.safe_load(f)
