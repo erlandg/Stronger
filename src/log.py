@@ -1,6 +1,7 @@
 from audioop import mul
 from itertools import count
 import click
+from defer import return_value
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,7 +22,9 @@ from utils import (
     gridshape_to_datapoints,
     get_median,
 )
+from training_program import TrainingProgram
 from load import parse_config
+
 
 
 def date_filter(df):
@@ -30,11 +33,13 @@ def date_filter(df):
     return df[dates > six_month]
 
 
+
 def column_normalise(array):
     col_sums = array.sum(0)
     for col, col_sum in zip(range(array.shape[1]), col_sums):
         array[:,col] = array[:,col] / col_sum
     return array
+
 
 
 def add_buffer(mesh, weight_ax, buffer, lower_limit=None, upper_limit=None, return_mask=False):
@@ -53,6 +58,7 @@ def add_buffer(mesh, weight_ax, buffer, lower_limit=None, upper_limit=None, retu
         return mesh
     else:
         return mesh, mesh != 0
+
 
 
 def get_filter(filter, **filter_kwargs):
@@ -83,6 +89,7 @@ def get_filter(filter, **filter_kwargs):
     return filter
 
 
+
 def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
     assert recorded_sets.shape == (reps.shape[0], weights.shape[0]), "Incorrect shapes"
     if cost == "mse":
@@ -109,6 +116,7 @@ def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
     return min(estimator_loss, key=estimator_loss.get)
 
 
+
 def crop(mesh, weight_ax, lower_limit = None, upper_limit = None):
     assert mesh.shape == (lower_limit.shape[0], weight_ax.shape[0]), f"Shapes do not match"
     for row in range(mesh.shape[0]):
@@ -123,6 +131,7 @@ def crop(mesh, weight_ax, lower_limit = None, upper_limit = None):
         mesh[row,:][weight_ax > max] = 0
         mesh[row,:][weight_ax <= min] = 0 # Remove junk volume
     return mesh
+
 
 
 def get_upper_limit(mesh, weight_ax, upper_limit):
@@ -142,6 +151,7 @@ def get_upper_limit(mesh, weight_ax, upper_limit):
     return updated_limit
 
 
+
 def count_instances(df, weight, rep, rpe=None, r_max=None):
     if r_max is not None:
         df["Reps"] = df["Reps"].clip(upper=r_max)
@@ -152,22 +162,6 @@ def count_instances(df, weight, rep, rpe=None, r_max=None):
         overlap = overlap.isin(df["RPE"] == rpe)
     return overlap["Exercise Name"].sum() # Count instances of overlapping required fields "Exercise Name".
 
-
-def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **mesh_kwargs):
-    zs = zs / zs.sum()
-
-    fig, ax = plt.subplots()
-    c = ax.pcolormesh(xs, ys, zs, cmap=cmap, **mesh_kwargs)
-    fig.colorbar(c, ax = ax)
-    ax.axis([xs.min(), xs.max(), ys.min(), ys.max()])
-
-    if title is not None: ax.set_title(title)
-    if xlabel is not None: ax.set_xlabel(xlabel)
-    if ylabel is not None: ax.set_ylabel(ylabel)
-    if save_path is not None:
-        plt.savefig(save_path, bbox_inches="tight")
-    else:
-        return fig, ax
 
 
 def masked_multinormal_distribution(xs, ys, mask = None, reps=None, weight=None):
@@ -249,14 +243,15 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
     if cfg.optimal_estimator is None:
         estimator_string = fit_estimator(cfg, recorded_sets, xs[0,:], ys[:,0], cost = "mse")
         setattr(cfg, "optimal_estimator", estimator_string)
-
-    upper_limit = get_upper_limit(
-        recorded_sets,
-        xs[0,:],
-        cfg.get_rep_max(
-            cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)
+    if cfg.upper_limit is None:
+        upper_limit = get_upper_limit(
+            recorded_sets,
+            xs[0,:],
+            cfg.get_rep_max(
+                cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)
+            )
         )
-    )
+        setattr(cfg, "upper_limit", upper_limit.tolist())
 
 
     # Add a buffer and remove points below lower threshold
@@ -265,7 +260,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = upper_limit,
+        upper_limit = cfg.upper_limit,
         return_mask = True
     )
 
@@ -285,7 +280,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         zs,
         xs[0,:],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = upper_limit,
+        upper_limit = cfg.upper_limit,
 
     )
 
@@ -294,6 +289,24 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         return xs, ys, zs
     else:
         return (xs, ys, zs), main_df    
+
+
+
+def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **mesh_kwargs):
+    zs = zs / zs.sum()
+
+    fig, ax = plt.subplots()
+    c = ax.pcolormesh(xs, ys, zs, cmap=cmap, **mesh_kwargs)
+    fig.colorbar(c, ax = ax)
+    ax.axis([xs.min(), xs.max(), ys.min(), ys.max()])
+
+    if title is not None: ax.set_title(title)
+    if xlabel is not None: ax.set_xlabel(xlabel)
+    if ylabel is not None: ax.set_ylabel(ylabel)
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
+    else:
+        return fig, ax
 
 
 
@@ -314,7 +327,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
     default = False,
     help = "Whether to graphically analyse the data."
 )
-def log_data(filepath, config_path, analysis):
+def main(filepath, config_path, analysis):
     filepath = config.DATA_DIR / filepath
     file_df = pd.read_csv(filepath, header = 0)
     file_df["Exercise Name"] = file_df["Exercise Name"].str.lower()
@@ -349,5 +362,13 @@ def log_data(filepath, config_path, analysis):
             )
 
 
+    # Sample program
+    training_program = TrainingProgram(cfgs, meshes)
+    training_program.sample(
+        fname = f"{str(config.SAVE_DIR)}-program.png"
+    )
+
+
 if __name__ == "__main__":
-    log_data()
+    main()
+
