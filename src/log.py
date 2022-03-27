@@ -95,7 +95,8 @@ def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
         if np.sum(recorded_sets[i]) == 0:
             maxes[i] = np.nan
         else:
-            maxes[i] = weights[np.argmax(recorded_sets[i])]
+            max_weight_idx = np.where(recorded_sets[i] != 0)[0].max()
+            maxes[i] = weights[max_weight_idx]
 
     estimator_loss = {estimator: 0 for estimator in config.ONE_REP_MAX.keys()}
     for estimator in estimator_loss.keys():
@@ -105,7 +106,6 @@ def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
             if np.isnan(max):
                 continue
             estimator_loss[estimator] += cost_func(max, estimated_rep_maxes[i])
-
     return min(estimator_loss, key=estimator_loss.get)
 
 
@@ -123,6 +123,23 @@ def crop(mesh, weight_ax, lower_limit = None, upper_limit = None):
         mesh[row,:][weight_ax > max] = 0
         mesh[row,:][weight_ax <= min] = 0 # Remove junk volume
     return mesh
+
+
+def get_upper_limit(mesh, weight_ax, upper_limit):
+    updated_limit = np.zeros_like(upper_limit)
+    for i, (r_rm, obs) in enumerate(zip(upper_limit, mesh)): # Ascending
+        if not obs.any():
+            new_max = r_rm
+        else:
+            max_weight_idx = np.where(obs != 0)[0].max()
+            new_max = max(weight_ax[max_weight_idx], r_rm)
+
+        if (updated_limit[:i] < new_max).any():
+            # If new r-RM max is higher than any (l < r) l-RM, increase l-RM to r-RM.
+            updated_limit[:i][updated_limit[:i] < new_max] = new_max
+
+        updated_limit[i] = new_max
+    return updated_limit
 
 
 def count_instances(df, weight, rep, rpe=None, r_max=None):
@@ -228,9 +245,18 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
 
     zs = np.zeros((ys.shape[0], xs.shape[1]))
     
+    # Find the optimal 1RM estimator
     if cfg.optimal_estimator is None:
         estimator_string = fit_estimator(cfg, recorded_sets, xs[0,:], ys[:,0], cost = "mse")
         setattr(cfg, "optimal_estimator", estimator_string)
+
+    upper_limit = get_upper_limit(
+        recorded_sets,
+        xs[0,:],
+        cfg.get_rep_max(
+            cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)
+        )
+    )
 
 
     # Add a buffer and remove points below lower threshold
@@ -239,7 +265,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)),
+        upper_limit = upper_limit,
         return_mask = True
     )
 
@@ -259,10 +285,11 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
         zs,
         xs[0,:],
         lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
-        upper_limit = cfg.get_rep_max(cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)),
+        upper_limit = upper_limit,
 
     )
 
+    zs = zs / zs.sum()
     if not return_df:
         return xs, ys, zs
     else:
