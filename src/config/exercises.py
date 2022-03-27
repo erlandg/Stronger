@@ -1,4 +1,5 @@
-from typing import Dict, Literal, Union
+from typing import Dict, List, Literal, Union
+from numpy import ndarray
 
 from utils import (
     brzycki,
@@ -32,6 +33,8 @@ INVERSE_MAX = {
 class Exercise(Config):
     # Exercise name.
     name: Literal["squat", "bench press", "deadlift"]
+    # Number of days a week to train
+    frequency: int = 3
     # Current 1RM of the exercise.
     one_rm: float
     # Minimum significant weight (suggest: 50%-65% 1RM).
@@ -48,8 +51,10 @@ class Exercise(Config):
     sigma: float = 2
     # Adds a buffer to all rep-weight combinations in a reasonable range.
     buffer: float = 0.01
-    # Optimal estimator
+    # Optimal estimator. Don't change!
     optimal_estimator: Literal["brzycki", "lombardi", "oconner", "wathen"] = None
+    # Upper limit (r-RM). Don't change!
+    upper_limit: List[float] = None
 
     @staticmethod
     def get_estimator(estimator_string, inverse = False):

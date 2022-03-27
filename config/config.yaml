@@ -1,15 +1,18 @@
 squat:
   one_rm: 220.
+  frequency: 2
   min_weight: 140.
   sigma: 3.
   buffer: 0.02
 bench press:
   one_rm: 170.
+  frequency: 3
   min_weight: 100.
   sigma: 3.
   buffer: 0.02
 deadlift:
   one_rm: 245.
+  frequency: 1
   min_weight: 180.
   mean_reps: 4
   mean_weight_at_reps: 205.
