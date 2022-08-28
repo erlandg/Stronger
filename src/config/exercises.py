@@ -55,6 +55,12 @@ class Exercise(Config):
     optimal_estimator: Literal["brzycki", "lombardi", "oconner", "wathen"] = None
     # Upper limit (r-RM). Don't change!
     upper_limit: List[float] = None
+    # Linear dampening. Don't change
+    dampening: bool = False
+    # Dampening strength. Don't change
+    dampening_decay: float = None
+    # L1 regularisation parameter on the dampening. 0 for none. Recommended range between 0 and 1.
+    l1_regularisation_param: float = 0.
 
     @staticmethod
     def get_estimator(estimator_string, inverse = False):

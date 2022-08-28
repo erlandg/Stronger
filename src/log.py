@@ -21,16 +21,17 @@ from utils import (
     mse,
     gridshape_to_datapoints,
     get_median,
+    apply_dampening,
 )
 from training_program import TrainingProgram
-from load import parse_config
+from load import parse_exercise_configs, parse_program_config
 
 
 
 def date_filter(df):
     dates = df["Date"]
-    six_month = str(config.DATETIME + relativedelta(months=-config.DATE_LIMIT))
-    return df[dates > six_month]
+    date_lim = str(config.DATETIME + relativedelta(months=-config.DATE_LIMIT))
+    return df[dates > date_lim]
 
 
 
@@ -90,7 +91,7 @@ def get_filter(filter, **filter_kwargs):
 
 
 
-def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
+def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse", l1_dampening_param = 0):
     assert recorded_sets.shape == (reps.shape[0], weights.shape[0]), "Incorrect shapes"
     if cost == "mse":
         cost_func = mse
@@ -98,22 +99,45 @@ def fit_estimator(cfg, recorded_sets, weights, reps, cost = "mse"):
         print(f"Cost function {cost} not recognised")
 
     maxes = np.zeros(reps.shape)
-    for i, rep in enumerate(reps):
-        if np.sum(recorded_sets[i]) == 0:
+    for i, rep_count in enumerate(recorded_sets):
+        if np.sum(rep_count) == 0:
             maxes[i] = np.nan
         else:
-            max_weight_idx = np.where(recorded_sets[i] != 0)[0].max()
+            max_weight_idx = np.where(rep_count != 0)[0].max()
             maxes[i] = weights[max_weight_idx]
 
-    estimator_loss = {estimator: 0 for estimator in config.ONE_REP_MAX.keys()}
+    estimator_loss = {estimator: [0, 1] for estimator in config.ONE_REP_MAX.keys()}
     for estimator in estimator_loss.keys():
         estimated_rep_maxes = cfg.get_rep_max(cfg.one_rm, reps, rep_max_estimator = config.INVERSE_MAX[estimator])
 
-        for i, max in enumerate(maxes):
-            if np.isnan(max):
-                continue
-            estimator_loss[estimator] += cost_func(max, estimated_rep_maxes[i])
-    return min(estimator_loss, key=estimator_loss.get)
+        if cfg.dampening:
+            best_loss = np.inf
+            for dampening in np.linspace(0, .025, 26):
+                loss = 0
+
+                for i, max in enumerate(maxes):
+                    if np.isnan(max):
+                        continue
+                    rep_max = round_to_closest(estimated_rep_maxes[i] * (1 - dampening)**i, config.SMALLEST_WEIGHT_STEP)
+                    loss += cost_func(max/cfg.one_rm, rep_max/cfg.one_rm) + l1_dampening_param * dampening
+                
+                if loss < best_loss:
+                    best_loss = loss
+                    best_dampening = dampening
+        else:
+            best_loss = 0
+            best_dampening = None
+            for i, max in enumerate(maxes):
+                if np.isnan(max):
+                    continue
+                rep_max = estimated_rep_maxes[i]
+                best_loss += cost_func(max/cfg.one_rm, rep_max/cfg.one_rm)
+
+        estimator_loss[estimator] = [best_loss, best_dampening]
+
+
+    optimal_estimator = min(estimator_loss, key=estimator_loss.get)
+    return optimal_estimator, estimator_loss[optimal_estimator][-1]
 
 
 
@@ -241,25 +265,42 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
     
     # Find the optimal 1RM estimator
     if cfg.optimal_estimator is None:
-        estimator_string = fit_estimator(cfg, recorded_sets, xs[0,:], ys[:,0], cost = "mse")
+        estimator_string, dampening_decay = fit_estimator(
+            cfg,
+            recorded_sets,
+            xs[0,:],
+            ys[:,0],
+            cost = "mse",
+            l1_dampening_param = cfg.l1_regularisation_param
+        )
         setattr(cfg, "optimal_estimator", estimator_string)
+        if not cfg.dampening:
+            dampening_decay = 0
+        setattr(cfg, "dampening_decay", dampening_decay)
+
     if cfg.upper_limit is None:
         upper_limit = get_upper_limit(
             recorded_sets,
             xs[0,:],
-            cfg.get_rep_max(
-                cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)
+            apply_dampening(
+                cfg.get_rep_max(
+                    cfg.one_rm, ys[:,0], rep_max_estimator = cfg.get_estimator(cfg.optimal_estimator, inverse = True)
+                ),
+                dampening = cfg.dampening_decay
             )
         )
         setattr(cfg, "upper_limit", upper_limit.tolist())
-
+    lower_limit = apply_dampening(
+        cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        dampening = cfg.dampening_decay
+    )
 
     # Add a buffer and remove points below lower threshold
     _, mask = add_buffer(
         zs.copy(),
         weight_ax = xs[0,:],
         buffer = cfg.buffer * exercise_counts.iloc[0],
-        lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        lower_limit = lower_limit,
         upper_limit = cfg.upper_limit,
         return_mask = True
     )
@@ -279,7 +320,7 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
     zs = crop(
         zs,
         xs[0,:],
-        lower_limit = cfg.get_rep_max(cfg.one_rm_low_cap * cfg.one_rm, ys[:,0], rep_max_estimator = inverse_brzycki),
+        lower_limit = lower_limit,
         upper_limit = cfg.upper_limit,
 
     )
@@ -295,10 +336,15 @@ def extract_meshgrid(exercise, exercise_df, cfg, filter=None, return_df = False,
 def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=None, cmap=None, **mesh_kwargs):
     zs = zs / zs.sum()
 
+    if xs.shape[1] == zs.shape[1]:
+        xs = np.concatenate((xs, [[xs[0,-1]+config.WEIGHT_STEP]]), axis=1)
+    if ys.shape[0] == zs.shape[0]:
+        ys = np.concatenate((ys, [[ys[-1,0]+1]]), axis=0)
+
     fig, ax = plt.subplots()
-    c = ax.pcolormesh(xs, ys, zs, cmap=cmap, **mesh_kwargs)
+    c = ax.pcolormesh(xs-config.WEIGHT_STEP/2, ys-.5, zs, cmap=cmap, shading="flat", **mesh_kwargs)
     fig.colorbar(c, ax = ax)
-    ax.axis([xs.min(), xs.max(), ys.min(), ys.max()])
+    ax.set_yticks(ys[:-1,0])
 
     if title is not None: ax.set_title(title)
     if xlabel is not None: ax.set_xlabel(xlabel)
@@ -316,10 +362,16 @@ def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=Non
     type = click.Path(),
 )
 @click.option(
-    "--config_path", "--config", "-c",
-    default = config.CONFIG_ROOT / "config.yaml",
+    "--exercise-config-path", "--exercise-config", "-ec",
+    default = config.CONFIG_ROOT / "exercise_config.yaml",
     type = click.Path(exists=True),
     help = "Path to config file of YAML-format corresponding to config objects found in src/config/exercise.py"
+)
+@click.option(
+    "--program-config-path", "--program-config", "-pc",
+    default = config.CONFIG_ROOT / "program_config.yaml",
+    type = click.Path(exists=True),
+    help = "Path to config file of YAML-format corresponding to config objects found in src/config/program.py"
 )
 @click.option(
     "--analysis", "-a",
@@ -327,7 +379,7 @@ def plot_heatmap(xs, ys, zs, save_path=None, title=None, xlabel=None, ylabel=Non
     default = False,
     help = "Whether to graphically analyse the data."
 )
-def main(filepath, config_path, analysis):
+def main(filepath, exercise_config_path, program_config_path, analysis):
     filepath = config.DATA_DIR / filepath
     file_df = pd.read_csv(filepath, header = 0)
     file_df["Exercise Name"] = file_df["Exercise Name"].str.lower()
@@ -341,7 +393,7 @@ def main(filepath, config_path, analysis):
         "Deadlift": file_df[file_df["Exercise Name"].str.contains("deadlift")],
     }
 
-    cfgs = parse_config(config_path, config.Exercise)
+    cfgs = parse_exercise_configs(exercise_config_path)
 
     meshes = {
         exercise: extract_meshgrid(exercise, df, cfg, filter="gauss") for (exercise, df), cfg in zip(exercise_dfs.items(), cfgs)
@@ -362,13 +414,14 @@ def main(filepath, config_path, analysis):
             )
 
 
+    program_cfg = parse_program_config(program_config_path)
     # Sample program
-    training_program = TrainingProgram(cfgs, meshes)
-    training_program.sample(
+    training_program = TrainingProgram(program_cfg, cfgs, meshes)
+    training_program.sample_program(
         fname = f"{str(config.SAVE_DIR)}-program.png"
     )
 
 
+
 if __name__ == "__main__":
     main()
-

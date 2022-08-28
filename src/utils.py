@@ -103,3 +103,13 @@ def get_median(mask, xs, ys, reps=None, weight=None):
         median = np.where(mask[xs == weight])[-1]
         median = np.median(ys[median])
     return median
+
+
+def apply_dampening(weight, reps = None, dampening = 0, step = .1):
+    if (type(weight) is float) or type(weight) is int:
+        assert reps is not None, "Numerical input requires argument reps."
+        return weight * (1 - dampening)**(reps - 1)
+    elif type(weight) is np.ndarray:
+        if reps is None:
+            reps = list(range(len(weight)))
+        return np.array([round_to_closest(w * (1 - dampening)**r, step = step) for r, w in zip(reps, weight)])
